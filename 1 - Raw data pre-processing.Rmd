@@ -1,0 +1,141 @@
+# R/4.1.2 on server:
+## open:
+source /home/yhdu/anaconda3/bin/activate 
+conda init 
+conda activate r4
+R
+## Quit:
+q() 
+conda deactivate
+
+# R/4.2.0 on server:
+## Open:
+module load ChAMP
+R
+## Quit:
+q()
+
+# Library:
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ChAMP)
+library(shiny)
+library(ggplot2)
+library(parallel)
+library(dplyr)
+library(lumi)
+library(minfi)
+library(RColorBrewer)
+library(MASS)
+library(limma)
+library(ggcorrplot)
+library(carData)
+library(car)
+library(EpiDISH)
+```
+
+# 1. Load data
+```{r}
+myLoad<-champ.load("/home/liuwent/01-data", arraytype="EPIC", filterSNPs=FALSE, filterXY=FALSE)
+dim(myLoad$beta)
+
+#Simplify column names
+colnames(myLoad$pd)[1]="Sample_Name"
+colnames(myLoad$pd)[13]="GA"
+colnames(myLoad$pd)[14]="Eth2"
+```
+## Organize ethnicities into bigger categories
+```{r}
+for (i in 1:nrow(myLoad$pd)){
+  if(myLoad$pd$Eth2[i] %in% c("American Samoan", "Chamorro", "Micronesian","MicronesianChuukese", "MicronesianKosraean", "samoan", "Samoan", "Tongan", "Hawaiian", "Tahitian")){
+    myLoad$pd$Eth2[i] = "PacificIslander"}
+  
+  else if(myLoad$pd$Eth2[i] %in% c("Asian", "Cambodian", "Chinese", "Filipino", "Japanese", "Korean", "Laotian", "Okinawan", "Vietnamese","American Indian")){
+    myLoad$pd$Eth2[i] = "Asian"}
+  
+  else if(myLoad$pd$Eth2[i] %in% c("Caucasian", "English", "German", "Hungarian", "Irish", "Italian", "Portuguese", "Scottish","Spanish")){
+    myLoad$pd$Eth2[i] = "Caucasian"}
+  
+  else{myLoad$pd$Eth2[i] = "Others"}
+}
+
+table(myLoad$pd$Eth2)
+
+# for (i in 1:nrow(myLoad$pd)){
+#   if(myLoad$pd$Eth2[i] %in% c("American Samoan", "Chamorro", "Micronesian","MicronesianChuukese",
+#                               "MicronesianKosraean", "samoan", "Samoan", "Tongan", "Hawaiian", "Tahitian")){
+#     myLoad$pd$Eth2[i] = "PacificIslander"
+#   }else if(myLoad$pd$Eth2[i] %in% c("Cambodian", "Chinese", "Filipino", "Japanese", "Korean", "Laotian",
+#                                     "Okinawan", "Vietnamese","American Indian")){
+#     myLoad$pd$Eth2[i] = "Asian"
+# 
+#   }else if(myLoad$pd$Eth2[i] %in% c("English", "German", "Hungarian", "Irish", "Italian", "Portuguese",
+#                                     "Scottish","Spanish")){
+#     myLoad$pd$Eth2[i] = "Caucasian"
+#   }else if(myLoad$pd$Eth2[i] %in% c("Mexican","Puerto Rican", "Guatemalan")){
+#     myLoad$pd$Eth2[i] = "Hispanic"
+#   }
+# }
+# 
+# head(myLoad$pd)
+```
+## Remove others group of Eth2
+```{r}
+myLoad$pd <- myLoad$pd[which(myLoad$pd$Eth2 != 'Others'), ]
+dim(myLoad$pd)
+
+myLoad$beta <- myLoad$beta[, which(colnames(myLoad$beta)%in%myLoad$pd$Sample_Name)]
+dim(myLoad$beta)
+
+BMI <- myLoad$pd[, c("Sample_Group","BMI")]
+write.csv(BMI, file="BMI.csv")
+```
+## Missing BMI values imputation (use mean of each sample groups to impute):
+```{r}
+myLoad$pd$BMI[c(45,53)] = c(27.9, 27.9)
+myLoad$pd$BMI[52] = 32.2
+
+save(myLoad, file='myLoad.RData')
+load("/home/liuwent/04-Full_Model/myLoad.RData")
+```
+## 1.1 Normalization and remove batch effect
+```{r}
+#QC
+champ.QC()
+myNorm<-champ.norm(beta=myLoad$beta, arraytype="EPIC", cores = 5)
+champ.QC(beta=myNorm)
+
+#Density plot has irregular beta value, which needs to be removed with the following code
+newpd<-myLoad$pd[!(myLoad$pd$Sample_Name)=="578",]
+newbeta<-myLoad$beta[,!(colnames(myLoad$beta)==578)]
+
+myLoad$pd<-newpd
+myLoad$beta<-newbeta
+
+pd<-myLoad$pd
+
+#Normalization
+myNorm0<-champ.norm(beta=myLoad$beta, arraytype="EPIC", cores = 5)
+
+##Run QC on myNorm
+champ.QC(beta=myNorm0)
+
+# SVD
+champ.SVD(beta=myNorm0, pd=myLoad$pd)
+
+#myCombat, Dr. Garmire wanted array and sample plate removed from svd, which can be done with batch name. However, the program will not allow you to remove sample_plate.
+myCombat<-champ.runCombat(beta=myNorm0, pd=myLoad$pd, batchname=c("Slide", "Array"))
+
+Mvalues<-beta2m(myCombat)
+
+# SVD
+champ.SVD(beta=myCombat, pd=myLoad$pd)
+
+#Save data:
+pd<-myLoad$pd
+
+save(myLoad,file='myLoad.Rdata')
+save(pd, file="pd.RData")
+save(myCombat,file='myCombat.RData')
+save(Mvalues, file = "Mvalues.RData")
+```
